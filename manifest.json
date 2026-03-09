@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "58微聊自动回复",
+  "version": "1.0.0",
+  "description": "58同城微聊 AI 自动回复客服系统",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://employer.58.com/*",
+    "http://127.0.0.1:3000/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://employer.58.com/main/imListPage*"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

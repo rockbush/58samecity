@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>58微聊自动回复</title>
+</head>
+<body>
+  <div class="container">
+    <!-- 顶部状态栏 -->
+    <header>
+      <h1>58微聊自动回复</h1>
+      <div class="toggle-row">
+        <span id="statusText">已开启</span>
+        <label class="switch">
+          <input type="checkbox" id="enableToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="stats" id="stats"></div>
+    </header>
+
+    <!-- Tab 导航 -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="rules">回复规则</button>
+      <button class="tab" data-tab="settings">设置</button>
+      <button class="tab" data-tab="logs">日志</button>
+      <button class="tab" data-tab="candidates">简历</button>
+    </nav>
+
+    <!-- 回复规则 Tab -->
+    <section id="tab-rules" class="tab-content active">
+      <div class="section-header">
+        <h2>关键词规则</h2>
+        <button class="btn btn-primary btn-sm" id="addRuleBtn">+ 添加</button>
+      </div>
+      <div id="rulesList" class="rules-list"></div>
+
+      <div class="fallback-section">
+        <h3>兜底回复（无匹配时使用）</h3>
+        <textarea id="fallbackReply" rows="3" placeholder="无匹配关键词时的默认回复"></textarea>
+        <button class="btn btn-primary btn-sm" id="saveFallback">保存</button>
+      </div>
+    </section>
+
+    <!-- 设置 Tab -->
+    <section id="tab-settings" class="tab-content">
+      <div class="setting-group">
+        <label>回复延迟（秒）</label>
+        <div class="range-inputs">
+          <input type="number" id="delayMin" min="1" max="30" step="1" value="3">
+          <span>~</span>
+          <input type="number" id="delayMax" min="1" max="60" step="1" value="8">
+          <span>秒</span>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label>每小时回复上限</label>
+        <input type="number" id="hourlyLimit" min="1" max="200" value="40">
+      </div>
+      <div class="setting-group">
+        <label>凌晨暂停时段</label>
+        <div class="range-inputs">
+          <input type="number" id="nightStart" min="0" max="23" value="0">
+          <span>点 ~</span>
+          <input type="number" id="nightEnd" min="0" max="23" value="7">
+          <span>点</span>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="saveSettings">保存设置</button>
+    </section>
+
+    <!-- 日志 Tab -->
+    <section id="tab-logs" class="tab-content">
+      <div class="section-header">
+        <h2>最近回复</h2>
+        <button class="btn btn-sm" id="clearLogs">清空</button>
+      </div>
+      <div id="logsList" class="logs-list">
+        <p class="empty-hint">暂无回复记录</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- 简历 Tab -->
+  <section id="tab-candidates" class="tab-content">
+    <div class="section-header">
+      <h2>收到的简历 <span id="candidateCount"></span></h2>
+      <button class="btn btn-sm" id="exportCandidates">导出CSV</button>
+    </div>
+    <div id="candidatesList" class="candidates-list">
+      <p class="empty-hint">暂无简历记录</p>
+    </div>
+  </section>
+
+  <!-- 规则编辑弹窗 -->
+  <div id="ruleModal" class="modal hidden">
+    <div class="modal-content">
+      <h3 id="modalTitle">添加规则</h3>
+      <div class="form-group">
+        <label>关键词（每行一个）</label>
+        <textarea id="ruleKeywords" rows="3" placeholder="你好&#10;您好&#10;hello"></textarea>
+      </div>
+      <div class="form-group">
+        <label>匹配模式</label>
+        <select id="ruleMatchMode">
+          <option value="fuzzy">模糊匹配（消息包含关键词）</option>
+          <option value="exact">精确匹配（完全一致）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>回复内容</label>
+        <textarea id="ruleReply" rows="3" placeholder="自动回复的内容"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="cancelRule">取消</button>
+        <button class="btn btn-primary" id="saveRule">保存</button>
+      </div>
+      <input type="hidden" id="ruleEditId">
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
