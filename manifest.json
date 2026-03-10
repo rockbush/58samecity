@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "58微聊自动回复",
-  "version": "1.0.0",
+  "name": "58微聊自动回复 v1.15",
+  "version": "1.15.0",
   "description": "58同城微聊 AI 自动回复客服系统",
   "permissions": ["storage"],
   "host_permissions": [
@@ -12,6 +12,12 @@
     "service_worker": "background/service-worker.js"
   },
   "content_scripts": [
+    {
+      "matches": ["https://employer.58.com/main/imListPage*"],
+      "js": ["content/intercept.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": ["https://employer.58.com/main/imListPage*"],
       "js": ["content/content.js"],

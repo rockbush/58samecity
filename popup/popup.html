@@ -67,6 +67,39 @@
           <span>点</span>
         </div>
       </div>
+
+      <hr style="margin:12px 0;border-color:#eee;">
+
+      <div class="setting-group">
+        <label style="display:flex;align-items:center;justify-content:space-between;">
+          <span>访客主动打招呼</span>
+          <label class="switch" style="margin:0;">
+            <input type="checkbox" id="visitorGreetingEnabled" checked>
+            <span class="slider"></span>
+          </label>
+        </label>
+      </div>
+      <div id="visitorSettingsGroup">
+        <div class="setting-group">
+          <label style="display:flex;align-items:center;justify-content:space-between;">
+            <span>不限年龄（联系所有访客）</span>
+            <label class="switch" style="margin:0;">
+              <input type="checkbox" id="visitorIgnoreAge">
+              <span class="slider"></span>
+            </label>
+          </label>
+        </div>
+        <div class="setting-group" id="visitorAgeRange">
+          <label>年龄范围（岁）</label>
+          <div class="range-inputs">
+            <input type="number" id="visitorAgeMin" min="16" max="60" value="20">
+            <span>~</span>
+            <input type="number" id="visitorAgeMax" min="16" max="60" value="30">
+            <span>岁</span>
+          </div>
+        </div>
+      </div>
+
       <button class="btn btn-primary" id="saveSettings">保存设置</button>
     </section>
 

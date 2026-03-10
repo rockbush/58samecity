@@ -36,6 +36,10 @@ async function loadConfig() {
     hourlyLimit: 40,
     nightPauseStart: 0,
     nightPauseEnd: 7,
+    visitorGreetingEnabled: true,
+    visitorIgnoreAge: false,
+    visitorAgeMin: 20,
+    visitorAgeMax: 30,
   });
 
   $('#enableToggle').checked = config.enabled;
@@ -46,6 +50,14 @@ async function loadConfig() {
   $('#hourlyLimit').value = config.hourlyLimit;
   $('#nightStart').value = config.nightPauseStart;
   $('#nightEnd').value = config.nightPauseEnd;
+
+  // 访客设置
+  $('#visitorGreetingEnabled').checked = config.visitorGreetingEnabled;
+  $('#visitorIgnoreAge').checked = config.visitorIgnoreAge;
+  $('#visitorAgeMin').value = config.visitorAgeMin;
+  $('#visitorAgeMax').value = config.visitorAgeMax;
+  $('#visitorSettingsGroup').style.display = config.visitorGreetingEnabled ? '' : 'none';
+  $('#visitorAgeRange').style.display = config.visitorIgnoreAge ? 'none' : '';
 
   renderRules(config.rules);
   loadStatus();
@@ -186,6 +198,16 @@ $('#saveFallback').addEventListener('click', async () => {
   showToast('兜底回复已保存');
 });
 
+// --- 访客打招呼开关 ---
+$('#visitorGreetingEnabled').addEventListener('change', (e) => {
+  $('#visitorSettingsGroup').style.display = e.target.checked ? '' : 'none';
+});
+
+// --- 不限年龄开关 ---
+$('#visitorIgnoreAge').addEventListener('change', (e) => {
+  $('#visitorAgeRange').style.display = e.target.checked ? 'none' : '';
+});
+
 // --- 保存设置 ---
 $('#saveSettings').addEventListener('click', async () => {
   const delayMin = Math.max(1, parseInt($('#delayMin').value) || 3) * 1000;
@@ -194,12 +216,21 @@ $('#saveSettings').addEventListener('click', async () => {
   const nightPauseStart = parseInt($('#nightStart').value) || 0;
   const nightPauseEnd = parseInt($('#nightEnd').value) || 7;
 
+  const visitorGreetingEnabled = $('#visitorGreetingEnabled').checked;
+  const visitorIgnoreAge = $('#visitorIgnoreAge').checked;
+  const visitorAgeMin = Math.max(16, parseInt($('#visitorAgeMin').value) || 20);
+  const visitorAgeMax = Math.min(60, parseInt($('#visitorAgeMax').value) || 30);
+
   await chrome.storage.local.set({
     delayMin,
     delayMax,
     hourlyLimit,
     nightPauseStart,
     nightPauseEnd,
+    visitorGreetingEnabled,
+    visitorIgnoreAge,
+    visitorAgeMin,
+    visitorAgeMax,
   });
 
   showToast('设置已保存');

@@ -168,7 +168,7 @@ function matchKeyword(text, rules) {
 }
 
 // --- 记录日志 ---
-async function logReply({ originalText, replyText, success, timestamp }) {
+async function logReply({ originalText, replyText, success, timestamp, tabId }) {
   const { logs = [] } = await chrome.storage.local.get({ logs: [] });
 
   logs.unshift({

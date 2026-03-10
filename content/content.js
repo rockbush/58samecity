@@ -20,7 +20,7 @@ const SELECTORS = {
   resumeName: '.card-receive-resume .name',
   resumeTarget: '.card-receive-resume .target',
   resumeDesc: '.card-receive-resume .desc-wraper',
-  resumePhone: '.card-receive-resume .mobile-btn',
+  resumePhoneBtn: '.mobile-btn', // 电话号码元素（在 .im-msg-resume-receive 内，不一定在 .card-receive-resume 内）
 
   // 左侧会话列表
   sessionList: '.mmc-session',
@@ -44,6 +44,9 @@ let isSending = false;
 let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
+// --- 版本 ---
+const VERSION = '1.9';
+
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
 const SWITCH_WAIT = 2000;        // 切换会话后等待 DOM 加载的时间（ms）
@@ -57,14 +60,18 @@ async function init() {
   const config = await chrome.storage.local.get({ enabled: true });
   enabled = config.enabled;
 
+  await loadGreetedVisitors();
+
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.enabled) {
       enabled = changes.enabled.newValue;
       console.log('[58自动回复] 状态:', enabled ? '开启' : '关闭');
       if (enabled) {
         startSessionScanner();
+        startVisitorScanner();
       } else {
         stopSessionScanner();
+        stopVisitorScanner();
       }
     }
   });
@@ -79,6 +86,7 @@ async function init() {
   // 等待聊天区域加载后，同时启动消息监听和会话扫描
   waitForChatBody();
   startSessionScanner();
+  startVisitorScanner();
 }
 
 // --- 等待聊天区域 DOM 加载 ---
@@ -378,16 +386,72 @@ function extractText(msgEl) {
   return text || null;
 }
 
-// --- 处理简历卡片 ---
+// 已启动电话监听的卡片（避免重复绑定 observer）
+const resumePhoneWatching = new WeakSet();
+
+// --- 等待电话写入：对 phoneEl 绑定专属 observer，用 expectedName 防止 Vue 复用错乱 ---
+function waitForPhone(msgEl, expectedName, phoneEl) {
+  if (resumePhoneWatching.has(msgEl)) return;
+  resumePhoneWatching.add(msgEl);
+
+  const tryProcess = () => {
+    if (processedElements.has(msgEl)) return; // 已处理，放弃
+    const currentName = msgEl.querySelector(SELECTORS.resumeName)?.innerText.trim() || '';
+    if (currentName !== expectedName) {
+      // Vue 复用了这个元素渲染别人，放弃
+      console.log(`[58自动回复] 卡片元素被复用（${expectedName}→${currentName}），放弃等待`);
+      watcher.disconnect();
+      return;
+    }
+    const phone = phoneEl.innerText.trim();
+    if (/^1[3-9]\d{9}$/.test(phone)) {
+      watcher.disconnect();
+      doProcessResumeCard(msgEl, expectedName, phone, apiResumeCache.get(expectedName) || null);
+    }
+  };
+
+  const watcher = new MutationObserver(tryProcess);
+  watcher.observe(phoneEl, { childList: true, characterData: true, subtree: true });
+
+  // 最多等 5 秒
+  setTimeout(() => {
+    watcher.disconnect();
+    if (!processedElements.has(msgEl)) {
+      console.warn(`[58自动回复] 等待 ${expectedName} 电话超时，跳过`);
+    }
+  }, 5000);
+}
+
+// --- 处理简历卡片入口 ---
 function handleResumeCard(msgEl) {
-  // 用元素引用去重：Vue 分批渲染会多次触发，但元素是同一个对象
   if (processedElements.has(msgEl)) return;
 
-  const name    = msgEl.querySelector(SELECTORS.resumeName)?.innerText.trim() || '';
-  const phone   = msgEl.querySelector(SELECTORS.resumePhone)?.innerText.trim() || '';
+  const name = msgEl.querySelector(SELECTORS.resumeName)?.innerText.trim() || '';
+  if (!name) return;
 
-  // 卡片尚未渲染完成（名字或电话为空），等下一次触发
-  if (!name || !phone) return;
+  // 优先用 API 缓存的电话（最可靠，不受 DOM 复用影响）
+  const cached = apiResumeCache.get(name);
+  if (cached?.phone) {
+    doProcessResumeCard(msgEl, name, cached.phone, cached);
+    return;
+  }
+
+  // API 数据还没到，等 DOM 里的电话元素
+  const phoneEl = msgEl.querySelector(SELECTORS.resumePhoneBtn);
+  const phone   = phoneEl?.innerText.trim() || '';
+
+  if (!phone || !/^1[3-9]\d{9}$/.test(phone)) {
+    if (phoneEl) waitForPhone(msgEl, name, phoneEl);
+    return;
+  }
+
+  doProcessResumeCard(msgEl, name, phone, null);
+}
+
+// --- 简历卡片核心处理（name/phone 均已确认有效时调用）---
+// apiData: intercept.js 拦截到的完整简历数据（可为 null，退回 DOM 解析）
+function doProcessResumeCard(msgEl, name, phone, apiData) {
+  if (processedElements.has(msgEl)) return;
 
   // 卡片已完整渲染，标记元素和 msgId
   processedElements.add(msgEl);
@@ -395,11 +459,21 @@ function handleResumeCard(msgEl) {
   if (processedMsgIds.has(msgId)) return;
   processedMsgIds.add(msgId);
 
-  const target  = msgEl.querySelector(SELECTORS.resumeTarget)?.innerText.trim().replace('投递职位-', '') || '';
-  const desc    = msgEl.querySelector(SELECTORS.resumeDesc)?.innerText.trim() || '';
-
-  // 解析描述字段：经验｜学历｜年龄｜求职状态
-  const [experience = '', education = '', age = '', jobStatus = ''] = desc.split(/[｜|]/);
+  // 优先用 API 数据，退回 DOM 解析
+  let target, experience, education, age, jobStatus;
+  if (apiData) {
+    target     = apiData.applyjob  || '';
+    experience = apiData.experience || '';
+    education  = apiData.educational || '';
+    age        = apiData.age        || '';
+    jobStatus  = apiData.jobState   || '';
+  } else {
+    target = msgEl.querySelector(SELECTORS.resumeTarget)?.innerText.trim().replace('投递职位-', '') || '';
+    const desc = msgEl.querySelector(SELECTORS.resumeDesc)?.innerText.trim() || '';
+    [experience = '', education = '', age = '', jobStatus = ''] = desc.split(/[｜|]/);
+    experience = experience.trim(); education = education.trim();
+    age = age.trim(); jobStatus = jobStatus.trim();
+  }
 
   const candidate = {
     name,
@@ -417,13 +491,25 @@ function handleResumeCard(msgEl) {
   // 抓取当前完整对话记录
   const conversation = captureConversation();
 
-  // 存入 chrome.storage + 发 QQ 通知 + 自动回复
-  chrome.storage.local.get({ candidates: [] }, ({ candidates }) => {
+  // 存入 chrome.storage + 年龄过滤 + 发 QQ 通知 + 自动回复
+  chrome.storage.local.get({
+    candidates: [],
+    visitorIgnoreAge: false,
+    visitorAgeMin: 20,
+    visitorAgeMax: 30,
+  }, ({ candidates, visitorIgnoreAge, visitorAgeMin, visitorAgeMax }) => {
     const exists = candidates.some(c => c.msgId === msgId);
     if (!exists) {
       candidates.unshift({ ...candidate, msgId, conversation });
       if (candidates.length > 1000) candidates.length = 1000;
       chrome.storage.local.set({ candidates });
+
+      // 年龄过滤：简历卡片里的年龄是纯文本，可靠
+      const ageNum = parseInt(candidate.age);
+      if (!visitorIgnoreAge && !isNaN(ageNum) && (ageNum < visitorAgeMin || ageNum > visitorAgeMax)) {
+        console.log(`[58自动回复] 简历年龄 ${ageNum} 不在 ${visitorAgeMin}-${visitorAgeMax}，不回复也不通知QQ`);
+        return;
+      }
 
       // 通知 service worker 发 QQ 群消息
       chrome.runtime.sendMessage({
@@ -433,7 +519,7 @@ function handleResumeCard(msgEl) {
       });
 
       // 自动回复求职者
-      enqueueSend('好的，简历已收到！我马上联系咨询师给您联系，请保持电话畅通。', 3000, '简历已投，请多关注，谢谢');
+      enqueueSend('已经收到你投递的简历，我们是做AI技术、3D建模、动画特效、影视后期、动漫设计、UE5虚幻引擎、unity3D开发等技术岗位，这边安排技术顾问跟你电话沟通，做岗位的匹配，请注意接听哦', 3000, '简历已投，请多关注，谢谢');
     }
   });
 }
@@ -617,6 +703,185 @@ setInterval(() => {
     console.log('[58自动回复] 清理已回复会话记录');
   }
 }, 2 * 60 * 60 * 1000);
+
+// =============================================================================
+// 版本 2：访客主动打招呼 + 年龄解码（PUA 字体宽度法）
+// =============================================================================
+
+// --- 简历 API 缓存（intercept.js 从 get_chat_records 拦截到的真实数据）---
+// key: name（姓名），value: { resumeid, name, phone, age, educational, experience, applyjob, jobState }
+const apiResumeCache = new Map();
+
+window.addEventListener('message', (e) => {
+  if (e.data?.type === '_58_RESUME' && e.data.name && e.data.phone) {
+    apiResumeCache.set(e.data.name, e.data);
+    console.log(`[58自动回复] API拦截到简历: ${e.data.name} → ${e.data.phone}`);
+  }
+});
+
+// --- 访客状态 ---
+const greetedVisitors = new Set();      // 已打招呼的访客 ID（内存）
+let visitorScanTimer = null;
+
+// --- 加载/保存已打招呼记录（跨刷新持久化）---
+async function loadGreetedVisitors() {
+  const { greetedVisitorIds = [] } = await chrome.storage.local.get({ greetedVisitorIds: [] });
+  greetedVisitorIds.forEach(id => greetedVisitors.add(id));
+  console.log(`[58自动回复] 已加载 ${greetedVisitors.size} 个已打招呼访客`);
+}
+
+async function saveGreetedVisitor(id) {
+  greetedVisitors.add(id);
+  const { greetedVisitorIds = [] } = await chrome.storage.local.get({ greetedVisitorIds: [] });
+  if (!greetedVisitorIds.includes(id)) {
+    greetedVisitorIds.push(id);
+    if (greetedVisitorIds.length > 5000) greetedVisitorIds.splice(0, greetedVisitorIds.length - 5000);
+    await chrome.storage.local.set({ greetedVisitorIds });
+  }
+}
+
+// --- 访客扫描器 ---
+function startVisitorScanner() {
+  if (visitorScanTimer) return;
+  console.log('[58自动回复] 启动访客扫描器');
+  // 用 setTimeout ID 占位，防止重复启动；10 秒后换成 setInterval
+  visitorScanTimer = setTimeout(() => {
+    scanNewVisitors();
+    visitorScanTimer = setInterval(scanNewVisitors, 30000);
+  }, 10000);
+}
+
+function stopVisitorScanner() {
+  if (visitorScanTimer) {
+    clearInterval(visitorScanTimer);
+    visitorScanTimer = null;
+    console.log('[58自动回复] 停止访客扫描器');
+  }
+}
+
+async function scanNewVisitors() {
+  if (!enabled || isScanning) return;
+
+  const { visitorGreetingEnabled } = await chrome.storage.local.get({ visitorGreetingEnabled: true });
+  if (!visitorGreetingEnabled) return;
+
+  const visitorTab = findTabByText('我的访客');
+  if (!visitorTab) {
+    console.log('[58自动回复] 未找到"我的访客"tab');
+    return;
+  }
+
+  // 导航到访客列表，收集待处理的访客 ID
+  visitorTab.click();
+  await sleep(1500);
+
+  const pendingIds = [];
+  for (const v of document.querySelectorAll('.infocardLi')) {
+    const id = v.getAttribute('resumeid') || v.getAttribute('infoid') || v.getAttribute('cuid');
+    if (id && !greetedVisitors.has(id)) pendingIds.push(id);
+  }
+
+  if (!pendingIds.length) {
+    console.log('[58自动回复] 无新访客需要处理');
+    return;
+  }
+
+  console.log(`[58自动回复] 发现 ${pendingIds.length} 名新访客`);
+
+  for (const visitorId of pendingIds) {
+    if (!enabled) break;
+
+    // 每次处理前重新回到访客列表，避免上次导航残留
+    visitorTab.click();
+    await sleep(1500);
+
+    const visitor = findVisitorById(visitorId);
+    if (!visitor) continue;
+
+    // 若卡片已标记「已沟通」，说明已主动联系过，跳过
+    if (visitor.textContent.includes('已沟通')) {
+      console.log(`[58自动回复] 访客 ${visitorId} 已沟通，标记跳过`);
+      await saveGreetedVisitor(visitorId);
+      continue;
+    }
+
+    // 点击访客卡片，等右侧面板加载
+    visitor.click();
+    await sleep(1200);
+
+    // 等待右侧面板的「在线沟通」按钮出现（最多 6 秒）
+    const btn = await waitForExactButton(['在线沟通'], 6000);
+    if (!btn) {
+      console.log('[58自动回复] 未找到「在线沟通」按钮（6秒超时），跳过');
+      continue;
+    }
+
+    btn.click();
+    console.log(`[58自动回复] 已点击「在线沟通」，访客 ${visitorId}`);
+    await saveGreetedVisitor(visitorId);
+    await sleep(2000);
+  }
+
+  // 扫描结束后回到消息列表
+  findTabByText('我的消息')?.click();
+}
+
+// --- 辅助：按文字找 tab ---
+function findTabByText(text) {
+  const candidates = document.querySelectorAll(
+    '.im-menu-item, [class*="tab-item"], [class*="menu-item"], [class*="nav-item"]'
+  );
+  for (const el of candidates) {
+    if (el.textContent.trim().includes(text)) return el;
+  }
+  return null;
+}
+
+// --- 辅助：轮询等待按钮出现 ---
+async function waitForExactButton(texts, maxWaitMs = 5000) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const btn = findExactButton(texts);
+    if (btn) return btn;
+    await sleep(500);
+  }
+  return null;
+}
+
+// --- 辅助：精确匹配按钮文字（遍历所有元素，不依赖 class/tag）---
+// 不做 isVisible 检查：CSS 过渡动画期间 opacity/visibility 可能未稳定，会漏检
+function findExactButton(texts) {
+  let fallback = null;
+  for (const el of document.body.querySelectorAll('*')) {
+    const t = el.textContent.trim();
+    if (!texts.includes(t)) continue;
+    if (el.tagName === 'BUTTON' || el.tagName === 'A') return el;
+    if (!fallback) fallback = el;
+  }
+  return fallback;
+}
+
+// --- 辅助：按 ID 在访客列表中找元素 ---
+function findVisitorById(id) {
+  for (const v of document.querySelectorAll('.infocardLi')) {
+    const vid = v.getAttribute('resumeid') || v.getAttribute('infoid') || v.getAttribute('cuid');
+    if (vid === id) return v;
+  }
+  return null;
+}
+
+// --- 调试辅助：在扩展 content script 上下文的控制台可调用 ---
+window._58findBtn = (keyword) => {
+  const results = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    if (!isVisible(el)) continue;
+    const t = el.textContent.trim();
+    if (keyword ? t.includes(keyword) : t.length > 0 && t.length < 15) {
+      results.push({ tag: el.tagName, text: t, class: el.className });
+    }
+  }
+  return results;
+};
 
 // --- 启动 ---
 init();
