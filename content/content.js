@@ -54,7 +54,7 @@ let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
 // --- 版本 ---
-const VERSION = '1.17';
+const VERSION = '1.18';
 
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
@@ -576,11 +576,24 @@ function doProcessResumeCard(msgEl, name, phone, apiData, directMsgId = null) {
       enqueueSend('已收到你的简历，为了更好的沟通，我们交换个微信吧', 3000, '简历投递');
 
       // 记录待处理换微信，并在回复发送后点击换微信按钮
-      const sessionId = getCurrentSessionId();
+      // 查找会话 ID：优先当前激活会话，退回用 API 的 chatUserId 匹配 data-key
+      let sessionId = getCurrentSessionId();
+      if (!sessionId && apiData?.chatUserId) {
+        for (const item of document.querySelectorAll(SELECTORS.sessionItem)) {
+          const key = getSessionId(item);
+          if (key === apiData.chatUserId || key === apiData.chatUserId + '@2') {
+            sessionId = key;
+            break;
+          }
+        }
+        if (sessionId) console.log('[58自动回复] 通过 chatUserId 找到会话:', sessionId);
+      }
       if (sessionId) {
         pendingExchanges.set(sessionId, { candidate, resumeTimestamp: candidate.timestamp });
         savePendingExchange();
         setTimeout(() => initiateWechatExchange(sessionId), 5000); // 等回复发送完毕
+      } else {
+        console.warn('[58自动回复] 无法确定会话 ID，换微信流程跳过');
       }
     }
   });
@@ -977,6 +990,21 @@ async function waitForWechatBtn(maxWaitMs = 3000) {
 async function initiateWechatExchange(sessionId) {
   if (!pendingExchanges.has(sessionId)) return;
 
+  // 确保目标会话是当前激活会话
+  if (getCurrentSessionId() !== sessionId) {
+    let targetItem = null;
+    for (const item of document.querySelectorAll(SELECTORS.sessionItem)) {
+      if (getSessionId(item) === sessionId) { targetItem = item; break; }
+    }
+    if (!targetItem) {
+      console.log('[58自动回复] initiateWechatExchange: 找不到目标会话，跳过');
+      return;
+    }
+    console.log('[58自动回复] 切换回目标会话后执行换微信');
+    targetItem.click();
+    await sleep(2000);
+  }
+
   const btn = await waitForWechatBtn(4000);
   if (!btn) {
     console.log('[58自动回复] 未找到「换微信」按钮，跳过');
@@ -986,15 +1014,25 @@ async function initiateWechatExchange(sessionId) {
   btn.click();
   console.log('[58自动回复] 已点击「换微信」');
 
-  // 等待确认弹窗出现
-  await sleep(1500);
-  const confirmBtn = document.querySelector(SELECTORS.wechatDialogConfirm)
-    || document.querySelector('.exchangeWxModal .el-button--primary');
+  // 等待确认弹窗出现，并轮询直到确定按钮可用（最多 5s）
+  await sleep(1000);
+  let confirmBtn = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const candidate = document.querySelector(SELECTORS.wechatDialogConfirm)
+      || document.querySelector('.exchangeWxModal .el-button--primary');
+    if (candidate && !candidate.disabled && !candidate.classList.contains('is-disabled')) {
+      confirmBtn = candidate;
+      break;
+    }
+    await sleep(300);
+  }
+
   if (confirmBtn) {
     confirmBtn.click();
     console.log('[58自动回复] 已确认换微信弹窗');
   } else {
-    console.log('[58自动回复] 未找到换微信确认按钮');
+    console.log('[58自动回复] 换微信确认按钮未出现或仍禁用，跳过');
   }
 }
 

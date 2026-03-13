@@ -36,9 +36,22 @@
     }
   }
 
+  // 从 get_chat_records URL 的 base64 params 里提取 chat_user_id
+  function extractChatUserId(url) {
+    try {
+      const b64 = new URL(url, 'https://im.58.com').searchParams.get('params');
+      if (!b64) return '';
+      const decoded = atob(b64);
+      const m = decoded.match(/chat_user_id=([^&\x00-\x1f\x7f]+)/);
+      return m ? decodeURIComponent(m[1]) : '';
+    } catch { return ''; }
+  }
+
   // 从 get_chat_records 响应里提取简历卡片完整信息
   function extractResumeCards(data, url) {
     if (!url.includes('get_chat_records')) return;
+
+    const chatUserId = extractChatUserId(url);
 
     const msgList = data?.data?.msg_list;
     if (!Array.isArray(msgList)) return;
@@ -52,15 +65,16 @@
 
         window.postMessage({
           type: '_58_RESUME',
-          resumeid:   r.resumeid   || '',
-          name:       r.name,
-          phone:      r.phone,
-          age:        String(r.age        || ''),
+          resumeid:    r.resumeid    || '',
+          name:        r.name,
+          phone:       r.phone,
+          age:         String(r.age        || ''),
           educational: r.educational || '',
-          experience: r.experience  || '',
-          applyjob:   r.applyjob    || '',
-          jobState:   r.jobState    || '',
-          msgId:      msg.msg_id    || '',
+          experience:  r.experience  || '',
+          applyjob:    r.applyjob    || '',
+          jobState:    r.jobState    || '',
+          msgId:       msg.msg_id    || '',
+          chatUserId,                        // session 标识，用于匹配 data-key
         }, '*');
       } catch {}
     }
