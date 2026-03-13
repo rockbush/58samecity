@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "58微聊自动回复 v1.15",
-  "version": "1.15.0",
+  "name": "58微聊自动回复 v1.16",
+  "version": "1.16.0",
   "description": "58同城微聊 AI 自动回复客服系统",
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": [
     "https://employer.58.com/*",
+    "https://js.58.com/*",
     "http://127.0.0.1:3000/*"
   ],
   "background": {

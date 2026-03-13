@@ -31,12 +31,19 @@ const SELECTORS = {
 
   // 顶部 tab
   tabUnread: '.im-menu-item',                          // "未读" tab
+
+  // 换微信功能
+  wechatCard: '.im-msg-changeWx',                      // 换微信成功后对方发来的微信卡片
+  wechatDesc: '.changeWx-desc',                        // 包含"我的微信号：xxx"的文字元素
+  wechatDialogConfirm: '.ChangeWxConfim .el-button--primary', // 换微信确认弹窗确认按钮
 };
 
 // --- 状态 ---
 const processedMsgIds = new Set();
 const processedElements = new WeakSet(); // 用元素引用去重，防止 Vue 分批渲染触发两次
+const processedWechatCards = new WeakSet(); // 防止重复处理换微信卡片
 const lastRepliedMsgId = new Map();
+const pendingExchanges = new Map(); // sessionId → { candidate, resumeTimestamp }
 let observer = null;
 let enabled = true;
 let sendQueue = [];
@@ -45,7 +52,7 @@ let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
 // --- 版本 ---
-const VERSION = '1.9';
+const VERSION = '1.16';
 
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
@@ -61,6 +68,8 @@ async function init() {
   enabled = config.enabled;
 
   await loadGreetedVisitors();
+  await loadPendingExchanges();
+  startGradeBChecker();
 
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.enabled) {
@@ -211,6 +220,32 @@ async function scanUnreadSessions() {
       // 会话间间隔
       await sleep(BETWEEN_SESSION_DELAY);
     }
+
+    // 额外扫描有待处理换微信的会话（即使没有未读角标，微信卡片可能已被浏览过）
+    for (const [pendingSessionId] of pendingExchanges.entries()) {
+      if (!enabled) break;
+
+      let targetItem = null;
+      for (const item of document.querySelectorAll(SELECTORS.sessionItem)) {
+        if (getSessionId(item) === pendingSessionId) { targetItem = item; break; }
+      }
+      if (!targetItem) continue;
+
+      targetItem.click();
+      await sleep(SWITCH_WAIT);
+
+      const chatBody = document.querySelector(SELECTORS.chatWinBody);
+      if (chatBody) {
+        const cards = chatBody.querySelectorAll(SELECTORS.wechatCard);
+        for (const card of cards) {
+          if (!processedWechatCards.has(card)) {
+            await handleWechatCard(card);
+          }
+        }
+      }
+
+      await sleep(BETWEEN_SESSION_DELAY);
+    }
   } catch (err) {
     console.error('[58自动回复] 扫描未读会话出错:', err);
   } finally {
@@ -337,6 +372,12 @@ async function handleLastMessageInSession(chatBody, sessionId) {
 // =============================================================================
 
 function processNode(node) {
+  // 换微信卡片（对方同意后发来，优先处理）
+  if (node.matches?.(SELECTORS.wechatCard)) {
+    handleWechatCard(node);
+    return;
+  }
+
   // 简历卡片消息（优先判断）
   if (node.matches?.(SELECTORS.resumeMsg)) {
     handleResumeCard(node);
@@ -349,6 +390,11 @@ function processNode(node) {
   }
 
   // 子树里查找
+  const wechatCards = node.querySelectorAll?.(SELECTORS.wechatCard);
+  if (wechatCards) {
+    for (const card of wechatCards) handleWechatCard(card);
+  }
+
   const resumeMsgs = node.querySelectorAll?.(SELECTORS.resumeMsg);
   if (resumeMsgs) {
     for (const msg of resumeMsgs) handleResumeCard(msg);
@@ -449,15 +495,17 @@ function handleResumeCard(msgEl) {
 }
 
 // --- 简历卡片核心处理（name/phone 均已确认有效时调用）---
-// apiData: intercept.js 拦截到的完整简历数据（可为 null，退回 DOM 解析）
-function doProcessResumeCard(msgEl, name, phone, apiData) {
-  if (processedElements.has(msgEl)) return;
+// msgEl 可为 null（API 驱动时无 DOM 元素）
+// directMsgId：API 直接提供的 msgId，优先于 DOM 解析
+function doProcessResumeCard(msgEl, name, phone, apiData, directMsgId = null) {
+  // 元素级去重（DOM 驱动时）
+  if (msgEl && processedElements.has(msgEl)) return;
 
-  // 卡片已完整渲染，标记元素和 msgId
-  processedElements.add(msgEl);
-  const msgId = getMsgId(msgEl);
-  if (processedMsgIds.has(msgId)) return;
-  processedMsgIds.add(msgId);
+  // 消息 ID 级去重（API 和 DOM 共用）
+  const msgId = directMsgId || getMsgId(msgEl) || '';
+  if (msgId && processedMsgIds.has(msgId)) return;
+  if (msgId) processedMsgIds.add(msgId);
+  if (msgEl) processedElements.add(msgEl);
 
   // 优先用 API 数据，退回 DOM 解析
   let target, experience, education, age, jobStatus;
@@ -483,6 +531,7 @@ function doProcessResumeCard(msgEl, name, phone, apiData) {
     age: age.trim(),
     jobStatus: jobStatus.trim(),
     phone,
+    resumeid: apiData?.resumeid || '',
     timestamp: Date.now(),
   };
 
@@ -511,15 +560,26 @@ function doProcessResumeCard(msgEl, name, phone, apiData) {
         return;
       }
 
-      // 通知 service worker 发 QQ 群消息
-      chrome.runtime.sendMessage({
-        type: 'RESUME_RECEIVED',
-        candidate,
-        conversation,
-      });
+      // 抓取简历详情页（后台静默打开）
+      const resumeDetailUrl = getResumeDetailUrl(msgEl, candidate.resumeid);
+      if (resumeDetailUrl) {
+        chrome.runtime.sendMessage({
+          type: 'FETCH_RESUME_DETAIL',
+          url: resumeDetailUrl,
+          resumeid: candidate.resumeid || simpleHash(name + phone),
+        });
+      }
 
-      // 自动回复求职者
-      enqueueSend('已经收到你投递的简历，我们是做AI技术、3D建模、动画特效、影视后期、动漫设计、UE5虚幻引擎、unity3D开发等技术岗位，这边安排技术顾问跟你电话沟通，做岗位的匹配，请注意接听哦', 3000, '简历已投，请多关注，谢谢');
+      // 自动回复求职者（换微信话术）
+      enqueueSend('已收到你的简历，为了更好的沟通，我们交换个微信吧', 3000, '简历投递');
+
+      // 记录待处理换微信，并在回复发送后点击换微信按钮
+      const sessionId = getCurrentSessionId();
+      if (sessionId) {
+        pendingExchanges.set(sessionId, { candidate, resumeTimestamp: candidate.timestamp });
+        savePendingExchange();
+        setTimeout(() => initiateWechatExchange(sessionId), 5000); // 等回复发送完毕
+      }
     }
   });
 }
@@ -714,8 +774,14 @@ const apiResumeCache = new Map();
 
 window.addEventListener('message', (e) => {
   if (e.data?.type === '_58_RESUME' && e.data.name && e.data.phone) {
-    apiResumeCache.set(e.data.name, e.data);
-    console.log(`[58自动回复] API拦截到简历: ${e.data.name} → ${e.data.phone}`);
+    const data = e.data;
+    apiResumeCache.set(data.name, data);
+    console.log(`[58自动回复] API拦截到简历: ${data.name} → ${data.phone}`);
+
+    // API 数据即判定对方发了简历，直接触发处理（不等 DOM 渲染）
+    if (enabled) {
+      doProcessResumeCard(null, data.name, data.phone, data, data.msgId || '');
+    }
   }
 });
 
@@ -866,6 +932,168 @@ function findVisitorById(id) {
   for (const v of document.querySelectorAll('.infocardLi')) {
     const vid = v.getAttribute('resumeid') || v.getAttribute('infoid') || v.getAttribute('cuid');
     if (vid === id) return v;
+  }
+  return null;
+}
+
+// =============================================================================
+// 版本 3：换微信流程
+// =============================================================================
+
+// --- 获取当前激活会话 ID ---
+function getCurrentSessionId() {
+  const active = document.querySelector(SELECTORS.sessionActive);
+  return active ? getSessionId(active) : null;
+}
+
+// --- 找到"换微信"按钮（遍历聊天输入区叶节点）---
+function findWechatBtn() {
+  const inputArea = document.querySelector('.chat-win-input');
+  if (inputArea) {
+    for (const el of inputArea.querySelectorAll('*')) {
+      if (el.children.length === 0 && el.textContent.trim() === '换微信') return el;
+    }
+  }
+  // 兜底：全局查找
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.children.length === 0 && el.textContent.trim() === '换微信') return el;
+  }
+  return null;
+}
+
+async function waitForWechatBtn(maxWaitMs = 3000) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const btn = findWechatBtn();
+    if (btn) return btn;
+    await sleep(300);
+  }
+  return null;
+}
+
+// --- 点击"换微信"并确认弹窗 ---
+async function initiateWechatExchange(sessionId) {
+  if (!pendingExchanges.has(sessionId)) return;
+
+  const btn = await waitForWechatBtn(4000);
+  if (!btn) {
+    console.log('[58自动回复] 未找到「换微信」按钮，跳过');
+    return;
+  }
+
+  btn.click();
+  console.log('[58自动回复] 已点击「换微信」');
+
+  // 等待确认弹窗出现
+  await sleep(1500);
+  const confirmBtn = document.querySelector(SELECTORS.wechatDialogConfirm)
+    || document.querySelector('.exchangeWxModal .el-button--primary');
+  if (confirmBtn) {
+    confirmBtn.click();
+    console.log('[58自动回复] 已确认换微信弹窗');
+  } else {
+    console.log('[58自动回复] 未找到换微信确认按钮');
+  }
+}
+
+// --- 处理对方发来的微信卡片 ---
+async function handleWechatCard(cardEl) {
+  if (processedWechatCards.has(cardEl)) return;
+  processedWechatCards.add(cardEl);
+
+  const descEl = cardEl.querySelector(SELECTORS.wechatDesc);
+  if (!descEl) {
+    console.log('[58自动回复] 换微信卡片：未找到微信号描述元素');
+    return;
+  }
+
+  const descText = descEl.innerText.trim();
+  // "我的微信号：rockbush" → "rockbush"
+  const wechat = descText.replace(/^我的微信号[：:]\s*/u, '').trim();
+  if (!wechat) {
+    console.log('[58自动回复] 换微信卡片：微信号为空');
+    return;
+  }
+
+  console.log(`[58自动回复] 收到微信号: ${wechat}`);
+
+  const sessionId = getCurrentSessionId();
+  const pending = sessionId ? pendingExchanges.get(sessionId) : null;
+
+  const now = Date.now();
+  const elapsed = pending ? now - pending.resumeTimestamp : Infinity;
+  const grade = elapsed < 10 * 60 * 1000 ? 'A量' : 'B量';
+  const candidate = pending?.candidate || {};
+
+  // 回复确认已收到
+  enqueueSend('已收到微信，马上加你，注意通过一下哟', 1500, '微信卡片');
+
+  // 发 QQ 通知
+  chrome.runtime.sendMessage({
+    type: 'WECHAT_RECEIVED',
+    candidate,
+    wechat,
+    grade,
+    conversation: captureConversation(),
+  });
+
+  // 清除待处理记录
+  if (sessionId) {
+    await removePendingExchange(sessionId);
+  }
+}
+
+// --- 持久化 pendingExchanges ---
+async function loadPendingExchanges() {
+  const { pendingExchangesData = [] } = await chrome.storage.local.get({ pendingExchangesData: [] });
+  for (const [sid, data] of pendingExchangesData) {
+    pendingExchanges.set(sid, data);
+  }
+  console.log(`[58自动回复] 已加载 ${pendingExchanges.size} 个待换微信记录`);
+}
+
+async function savePendingExchange() {
+  const arr = [...pendingExchanges.entries()];
+  await chrome.storage.local.set({ pendingExchangesData: arr });
+}
+
+async function removePendingExchange(sessionId) {
+  pendingExchanges.delete(sessionId);
+  await savePendingExchange();
+}
+
+// --- 定时检查 B 量超时（10 分钟未收到微信）---
+function startGradeBChecker() {
+  setInterval(async () => {
+    const now = Date.now();
+    const TIMEOUT = 10 * 60 * 1000;
+
+    for (const [sessionId, data] of [...pendingExchanges.entries()]) {
+      if (now - data.resumeTimestamp >= TIMEOUT) {
+        console.log(`[58自动回复] 会话 ${sessionId} 超时未收到微信，发送B量通知`);
+        chrome.runtime.sendMessage({
+          type: 'WECHAT_RECEIVED',
+          candidate: data.candidate,
+          wechat: '',
+          grade: 'B量',
+          conversation: [],
+        });
+        await removePendingExchange(sessionId);
+      }
+    }
+  }, 60000);
+}
+
+// --- 获取简历详情页 URL ---
+// 优先从卡片内的 <a> 链接取，退而用 resumeid 构造
+function getResumeDetailUrl(msgEl, resumeid) {
+  // 卡片里可能有 <a> 直接带 href
+  const link = msgEl.querySelector('a[href*="resume"]') || msgEl.querySelector('a[href]');
+  if (link?.href) return link.href;
+
+  // 用 resumeid 构造（58同城雇主端已确认的 URL 格式）
+  if (resumeid) {
+    return `https://employer.58.com/main/resumedetail?resumeid=${resumeid}`;
   }
   return null;
 }
