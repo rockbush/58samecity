@@ -33,7 +33,8 @@ const SELECTORS = {
   tabUnread: '.im-menu-item',                          // "未读" tab
 
   // 换微信功能
-  wechatCard: '.im-msg-changeWx',                      // 换微信成功后对方发来的微信卡片
+  wechatCard: '.im-msg-changeWx',                      // 换微信卡片（申请 or 成功，同一类名）
+  wechatInviteBtns: '.changeWx-btns',                  // 对方主动申请换微信时的按钮容器
   wechatDesc: '.changeWx-desc',                        // 包含"我的微信号：xxx"的文字元素
   wechatDialogConfirm: '.ChangeWxConfim .el-button--primary', // 换微信确认弹窗确认按钮
 };
@@ -41,7 +42,8 @@ const SELECTORS = {
 // --- 状态 ---
 const processedMsgIds = new Set();
 const processedElements = new WeakSet(); // 用元素引用去重，防止 Vue 分批渲染触发两次
-const processedWechatCards = new WeakSet(); // 防止重复处理换微信卡片
+const processedWechatCards = new WeakSet();  // 防止重复处理换微信卡片（成功卡）
+const processedWechatInvites = new WeakSet(); // 防止重复处理换微信申请
 const lastRepliedMsgId = new Map();
 const pendingExchanges = new Map(); // sessionId → { candidate, resumeTimestamp }
 let observer = null;
@@ -52,7 +54,7 @@ let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
 // --- 版本 ---
-const VERSION = '1.16';
+const VERSION = '1.17';
 
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
@@ -996,8 +998,41 @@ async function initiateWechatExchange(sessionId) {
   }
 }
 
+// --- 处理对方主动发来的换微信申请（有拒绝/同意按钮）---
+function handleWechatInvite(cardEl) {
+  if (processedWechatInvites.has(cardEl)) return;
+  processedWechatInvites.add(cardEl);
+
+  const btnsContainer = cardEl.querySelector(SELECTORS.wechatInviteBtns);
+  if (!btnsContainer) return;
+
+  let agreeBtn = null;
+  for (const btn of btnsContainer.querySelectorAll('.el-button--primary')) {
+    if (btn.textContent.trim() === '同意') { agreeBtn = btn; break; }
+  }
+  if (!agreeBtn) {
+    console.log('[58自动回复] 换微信申请：未找到同意按钮');
+    return;
+  }
+
+  const delay = 1500 + Math.random() * 2000;
+  console.log(`[58自动回复] 检测到换微信申请，${Math.round(delay / 1000)}s 后自动同意`);
+  setTimeout(() => {
+    if (!agreeBtn.disabled && !agreeBtn.classList.contains('is-disabled')) {
+      agreeBtn.click();
+      console.log('[58自动回复] 已点击同意换微信申请');
+    }
+  }, delay);
+}
+
 // --- 处理对方发来的微信卡片 ---
 async function handleWechatCard(cardEl) {
+  // 先判断是申请卡（有 changeWx-btns）还是成功卡（有微信号）
+  if (cardEl.querySelector(SELECTORS.wechatInviteBtns)) {
+    handleWechatInvite(cardEl);
+    return;
+  }
+
   if (processedWechatCards.has(cardEl)) return;
   processedWechatCards.add(cardEl);
 

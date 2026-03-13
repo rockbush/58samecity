@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "58微聊自动回复 v1.16",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "58同城微聊 AI 自动回复客服系统",
   "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": [
