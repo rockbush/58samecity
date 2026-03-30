@@ -40,6 +40,10 @@ async function loadConfig() {
     visitorIgnoreAge: false,
     visitorAgeMin: 20,
     visitorAgeMax: 30,
+    scanIntervalMin: 30,
+    scanIntervalMax: 90,
+    visitorScanIntervalMin: 60,
+    visitorScanIntervalMax: 180,
   });
 
   $('#enableToggle').checked = config.enabled;
@@ -50,6 +54,10 @@ async function loadConfig() {
   $('#hourlyLimit').value = config.hourlyLimit;
   $('#nightStart').value = config.nightPauseStart;
   $('#nightEnd').value = config.nightPauseEnd;
+  $('#scanIntervalMin').value = config.scanIntervalMin;
+  $('#scanIntervalMax').value = config.scanIntervalMax;
+  $('#visitorScanIntervalMin').value = config.visitorScanIntervalMin;
+  $('#visitorScanIntervalMax').value = config.visitorScanIntervalMax;
 
   // 访客设置
   $('#visitorGreetingEnabled').checked = config.visitorGreetingEnabled;
@@ -221,6 +229,11 @@ $('#saveSettings').addEventListener('click', async () => {
   const visitorAgeMin = Math.max(16, parseInt($('#visitorAgeMin').value) || 20);
   const visitorAgeMax = Math.min(60, parseInt($('#visitorAgeMax').value) || 30);
 
+  const scanIntervalMin = Math.max(5, parseInt($('#scanIntervalMin').value) || 30);
+  const scanIntervalMax = Math.max(scanIntervalMin + 5, parseInt($('#scanIntervalMax').value) || 90);
+  const visitorScanIntervalMin = Math.max(10, parseInt($('#visitorScanIntervalMin').value) || 60);
+  const visitorScanIntervalMax = Math.max(visitorScanIntervalMin + 5, parseInt($('#visitorScanIntervalMax').value) || 180);
+
   await chrome.storage.local.set({
     delayMin,
     delayMax,
@@ -231,6 +244,10 @@ $('#saveSettings').addEventListener('click', async () => {
     visitorIgnoreAge,
     visitorAgeMin,
     visitorAgeMax,
+    scanIntervalMin,
+    scanIntervalMax,
+    visitorScanIntervalMin,
+    visitorScanIntervalMax,
   });
 
   showToast('设置已保存');

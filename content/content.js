@@ -54,7 +54,7 @@ let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
 // --- 版本 ---
-const VERSION = '1.19';
+const VERSION = '1.20';
 
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
@@ -161,16 +161,25 @@ function markExistingMessages(container) {
 function startSessionScanner() {
   if (scanTimer) return;
   console.log('[58自动回复] 启动未读会话扫描器');
-  scanTimer = setInterval(() => {
+  scheduleNextScan();
+}
+
+async function scheduleNextScan() {
+  const cfg = await chrome.storage.local.get({ scanIntervalMin: 30, scanIntervalMax: 90 });
+  const min = Math.max(5, cfg.scanIntervalMin) * 1000;
+  const max = Math.max(min + 1000, cfg.scanIntervalMax * 1000);
+  const delay = min + Math.random() * (max - min);
+  scanTimer = setTimeout(async () => {
     if (enabled && !isScanning && !isSending) {
-      scanUnreadSessions();
+      await scanUnreadSessions();
     }
-  }, SCAN_INTERVAL);
+    scheduleNextScan();
+  }, delay);
 }
 
 function stopSessionScanner() {
   if (scanTimer) {
-    clearInterval(scanTimer);
+    clearTimeout(scanTimer);
     scanTimer = null;
     console.log('[58自动回复] 停止未读会话扫描器');
   }
@@ -843,16 +852,23 @@ async function saveGreetedVisitor(id) {
 function startVisitorScanner() {
   if (visitorScanTimer) return;
   console.log('[58自动回复] 启动访客扫描器');
-  // 用 setTimeout ID 占位，防止重复启动；10 秒后换成 setInterval
-  visitorScanTimer = setTimeout(() => {
-    scanNewVisitors();
-    visitorScanTimer = setInterval(scanNewVisitors, 30000);
-  }, 10000);
+  scheduleNextVisitorScan();
+}
+
+async function scheduleNextVisitorScan() {
+  const cfg = await chrome.storage.local.get({ visitorScanIntervalMin: 60, visitorScanIntervalMax: 180 });
+  const min = Math.max(10, cfg.visitorScanIntervalMin) * 1000;
+  const max = Math.max(min + 1000, cfg.visitorScanIntervalMax * 1000);
+  const delay = min + Math.random() * (max - min);
+  visitorScanTimer = setTimeout(async () => {
+    if (enabled) await scanNewVisitors();
+    scheduleNextVisitorScan();
+  }, delay);
 }
 
 function stopVisitorScanner() {
   if (visitorScanTimer) {
-    clearInterval(visitorScanTimer);
+    clearTimeout(visitorScanTimer);
     visitorScanTimer = null;
     console.log('[58自动回复] 停止访客扫描器');
   }
