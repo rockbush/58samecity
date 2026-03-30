@@ -54,7 +54,7 @@ let isScanning = false;          // 是否正在扫描未读会话
 let scanTimer = null;
 
 // --- 版本 ---
-const VERSION = '1.18';
+const VERSION = '1.19';
 
 // --- 配置 ---
 const SCAN_INTERVAL = 5000;      // 扫描未读会话的间隔（ms）
@@ -314,9 +314,23 @@ async function handleLastMessageInSession(chatBody, sessionId) {
     }
   }
 
+  // 该会话正在等待换微信，跳过文字回复
+  if (pendingExchanges.has(sessionId)) {
+    console.log(`[58自动回复] 会话 ${sessionId} 等待换微信中，跳过文字回复`);
+    return;
+  }
+
+  const unreadSlice = allMsgs.slice(lastMyMsgIndex + 1);
+
+  // 未回复消息里含简历卡片，让简历流程处理，文字回复跳过
+  const hasUnreadResume = unreadSlice.some(el => el.classList.contains('im-msg-resume-receive'));
+  if (hasUnreadResume) {
+    console.log(`[58自动回复] 会话 ${sessionId} 含简历卡片，跳过文字回复`);
+    return;
+  }
+
   // 收集最后一条我方消息之后、对方发来的所有消息（排除简历卡片，由 handleResumeCard 单独处理）
-  const unreadOtherMsgs = allMsgs
-    .slice(lastMyMsgIndex + 1)
+  const unreadOtherMsgs = unreadSlice
     .filter(el => el.classList.contains('im-msg-other') && !el.classList.contains('im-msg-resume-receive'));
 
   if (unreadOtherMsgs.length === 0) {
@@ -661,6 +675,10 @@ function handleNewMessage(msgEl) {
 
   // 如果正在扫描会话，跳过实时监听（避免冲突）
   if (isScanning) return;
+
+  // 该会话正在等待换微信，跳过文字回复
+  const currentSessionId = getCurrentSessionId();
+  if (currentSessionId && pendingExchanges.has(currentSessionId)) return;
 
   console.log(`[58自动回复] 收到实时消息: "${text}"`);
 
